@@ -77,7 +77,7 @@ public:
         // between a block and its parent exceeds nPowEmergencyTimeout.
         consensus.sha256ReactivationHeight = 571799;
         // 120 seconds = 4x the 30s target spacing.
-        consensus.nPowEmergencyTimeout = 120;
+        consensus.nPowEmergencyTimeout = 180;
         consensus.difficultyForkHeight = std::numeric_limits<int>::max();
         consensus.nextDifficultyForkHeight = 1;
         consensus.nextDifficultyFork2Height = 1;
