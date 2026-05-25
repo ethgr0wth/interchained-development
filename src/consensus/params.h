@@ -57,6 +57,32 @@ struct Params {
     uint256 powLimitYespower;
     int yespowerForkHeight;
     int sha256ForkHeight;
+    /**
+     * Height at which the live chain forks BACK to SHA256 as the main PoW.
+     * Distinct from `sha256ForkHeight` (which is historical / pre-existing).
+     *
+     * Pre-sha256ReactivationHeight: Yespower remains the main PoW
+     *   (historical Yespower blocks stay valid forever).
+     * At/after sha256ReactivationHeight: SHA256 is the main PoW. Yespower
+     *   is allowed only as an emergency fallback when difficulty drops
+     *   below 1 (encoded target easier than the SHA256 powLimit).
+     *
+     * Use std::numeric_limits<int>::max() to disable on networks that
+     * should not fork back.
+     */
+    int sha256ReactivationHeight{std::numeric_limits<int>::max()};
+    /**
+     * Post-reactivation emergency timeout (seconds). If the candidate
+     * block's nTime exceeds the previous block's nTime by more than this
+     * value, the Yespower fallback is armed for that block (a Yespower
+     * solution is accepted in addition to SHA256). 0 disables the
+     * fallback entirely (SHA256-only post-fork).
+     *
+     * Trigger is purely time-based because once SHA256 ASICs lock the
+     * chain, difficulty will never naturally slide low enough for a
+     * target-based trigger to fire.
+     */
+    int64_t nPowEmergencyTimeout{0};
     int difficultyForkHeight;
     int nextDifficultyForkHeight;
     int nextDifficultyFork2Height;
