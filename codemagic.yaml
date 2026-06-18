@@ -171,7 +171,9 @@ workflows:
           cd /tmp/bdb-src/build_unix
           arch -x86_64 env CFLAGS="-O2 -fPIC" \
             ../dist/configure \
-              --prefix="$CM_BUILD_DIR/db4" --enable-cxx --disable-shared --with-pic
+              --prefix="$CM_BUILD_DIR/db4" --enable-cxx --disable-shared --with-pic \
+              --enable-posixmutexes --with-mutex=POSIX/pthreads/library \
+            || { cat config.log; exit 1; }
           arch -x86_64 make -j"$J"
           arch -x86_64 make install
           # Some Rosetta builds install the static libraries but omit headers from

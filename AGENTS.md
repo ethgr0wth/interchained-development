@@ -205,11 +205,13 @@ conftest.cpp:67:18: fatal error: 'db_cxx.h' file not found
 Important subtlety:
 
 - The x86_64 Codemagic job builds Berkeley DB 4.8 under Rosetta and points configure at `$CM_BUILD_DIR/db4/include`.
-- The failing configure command already had the correct `-I` flag, so the issue was not lost `CPPFLAGS`.
-- The failure means `db_cxx.h` was not present in the configured prefix after the BDB install step.
+- The first visible Interchained configure failure had the correct `-I` flag, so the issue was not lost `CPPFLAGS`.
+- A follow-up Codemagic run showed the earlier root cause: Berkeley DB configure selected `UNIX/fcntl`, warned `NO SHARED LATCH IMPLEMENTATION FOUND FOR THIS PLATFORM`, and exited with `Unable to find a mutex implementation` before any usable install happened.
 
 Fix pattern in `codemagic.yaml`:
 
+- In the Rosetta BDB configure call, force the POSIX pthread backend with `--enable-posixmutexes --with-mutex=POSIX/pthreads/library`.
+- Wrap BDB configure with `|| { cat config.log; exit 1; }` so a failed configure cannot be hidden by later `make` and header-copy noise.
 - After `arch -x86_64 make install`, explicitly ensure `$CM_BUILD_DIR/db4/include` exists.
 - Stage `db.h` and `db_cxx.h` from the BDB build/source tree into that include directory if install omitted them.
 - Fail early with a directory listing if `db_cxx.h` or `libdb_cxx-4.8.a` is still missing.
