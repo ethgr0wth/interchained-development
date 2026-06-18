@@ -22,12 +22,10 @@ $(NEDB_FFI_LIB): FORCE
 
 FORCE:
 .PHONY: FORCE
-
-# Link binaries depend on the FFI lib — ensures cargo runs before the link step.
-# (all-local runs AFTER linking; _DEPENDENCIES runs BEFORE.)
-interchainedd_DEPENDENCIES       = $(NEDB_FFI_LIB)
-interchained_node_DEPENDENCIES   = $(NEDB_FFI_LIB)
 # ─────────────────────────────────────────────────────────────────────────────
+# Note: libnedb_ffi.a is pre-built by CI before ./configure && make runs.
+# The $(NEDB_FFI_LIB) entry in interchained_bin_ldadd passes it to the linker.
+# For local non-CI builds: run `cd nedb-ffi && cargo build --release` first.
 
 if EMBEDDED_UNIVALUE
 LIBUNIVALUE = univalue/libunivalue.la

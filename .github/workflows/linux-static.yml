@@ -54,16 +54,22 @@ jobs:
             libzmq3-dev libsqlite3-dev libssl-dev \
             file curl xz-utils perl patchelf
 
-      - name: Install Rust (required for nedb-ffi)
+      # ── NEDB FFI: install Rust and pre-build libnedb_ffi.a ────────────────
+      # libnedb_ffi.a must exist before ./configure && make runs so the
+      # linker finds it when it processes $(NEDB_FFI_LIB) in LDADD.
+      - name: Install Rust (stable, minimal)
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Build NEDB FFI library (Rust — must exist before ./configure)
+      - name: Build NEDB FFI library (must precede ./configure)
         run: |
-          source "$HOME/.cargo/env" || true
-          cd nedb-ffi && cargo build --release
-          echo "libnedb_ffi.a size: $(du -sh target/release/libnedb_ffi.a)"
+          . "$HOME/.cargo/env"
+          cd nedb-ffi
+          cargo build --release
+          echo "libnedb_ffi.a: $(du -sh target/release/libnedb_ffi.a | cut -f1)"
+      # ─────────────────────────────────────────────────────────────────────
 
       - name: Build Berkeley DB 4.8 (portable) from observerdev/db-4.8.30
         env:
@@ -93,12 +99,14 @@ jobs:
           BDB_PREFIX: ${{ github.workspace }}/db4
           BDB_CFLAGS: "-I${{ github.workspace }}/db4/include"
           CPPFLAGS: "-I${{ github.workspace }}/db4/include"
-          # Portable trick: ship with static libstdc++ / libgcc, leave glibc dynamic
-          LDFLAGS: "-L${{ github.workspace }}/db4/lib -static-libstdc++ -static-libgcc"
+          # Portable trick: ship with static libstdc++ / libgcc, leave glibc dynamic.
+          # -lpthread -ldl are required by the NEDB FFI Rust staticlib on Linux.
+          LDFLAGS: "-L${{ github.workspace }}/db4/lib -static-libstdc++ -static-libgcc -lpthread -ldl"
           CFLAGS: "-O2"
           CXXFLAGS: "-O2 -std=c++14"
         run: |
           set -eux
+          . "$HOME/.cargo/env"
           ./autogen.sh
           export CPATH="$BDB_PREFIX/include:${CPATH:-}"
           [ -d "$BDB_PREFIX/include/db4" ] && export CPATH="$BDB_PREFIX/include/db4:$CPATH"
@@ -129,7 +137,7 @@ jobs:
           ! readelf -l "$D_BIN" | grep -qi 'ld-musl'
           ldd "$D_BIN" || true
           ldd "$CLI_BIN" || true
-      
+
       - name: Show runtime deps (ldd)
         run: |
           set -eux
@@ -155,27 +163,27 @@ jobs:
               /^\// {print $1}
             ' | while read -r so; do
               [ -f "$so" ] || continue
-          
+
               base="$(basename "$so")"
-          
+
               # Never bundle glibc / loader / low-level system libs (must come from host)
               case "$base" in
                 libc.so.*|ld-linux*.so*|libpthread.so.*|libdl.so.*|libm.so.*|libresolv.so.*|librt.so.*|libutil.so.*|libnsl.so.*|libanl.so.*|libcrypt.so.*)
                   continue
                   ;;
               esac
-          
+
               # Optional: skip these because you already link them statically via -static-libstdc++/-static-libgcc
               case "$base" in
                 libstdc++.so.*|libgcc_s.so.*)
                   continue
                   ;;
               esac
-          
+
               cp -v "$so" "$ARTIFACT_DIR/lib/" || true
             done
           done
-          
+
           # Force RPATH so indirect deps (eg. libzmq -> libpgm) also resolve from ./lib
           patchelf --force-rpath --set-rpath '$ORIGIN/lib' "$ARTIFACT_DIR/$(basename "$D_BIN")"
           patchelf --force-rpath --set-rpath '$ORIGIN/lib' "$ARTIFACT_DIR/$(basename "$CLI_BIN")"
