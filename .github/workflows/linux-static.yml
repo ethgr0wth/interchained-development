@@ -197,13 +197,34 @@ jobs:
           test -f "$NEDB_LIB"
           nm "$NEDB_LIB" | grep ' T nedb_get'
 
-          # Defensive CI-only final-link override: the .la wrapper is valid, but
-          # libtool can still drop or reorder old_library archives during
-          # executable links. LIBS is expanded after Automake LDADD archives, so
-          # appending the absolute archive here puts nedb_* definitions after
-          # libinterchained_server.a and libinterchained_wallet.a references.
-          printf '\n# CI: resolve NEDB FFI references after Automake LDADD archives\nLIBS += %s\n' "$NEDB_LIB" >> src/Makefile
-          grep '^LIBS += .*libnedb_ffi\.a' src/Makefile
+          # Defensive CI-only final-link override: group the Bitcoin-style C++
+          # archives with the Rust FFI archive for final executable links.
+          # GNU ld normally resolves static archives left-to-right once; grouping
+          # makes it rescan until nedb_* references from server/wallet archives
+          # are satisfied by libnedb_ffi.a even if libtool reorders .la deplibs.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/Makefile')
+          s = p.read_text()
+          group_start = '-Wl,--start-group'
+          group_end = '-Wl,--end-group'
+          nedb = '$(abs_top_builddir)/../nedb-ffi/target/release/libnedb_ffi.a'
+          replacements = {
+              'interchainedd_LDADD = $(LIBBITCOIN_SERVER) $(interchained_bin_ldadd) $(NEDB_FFI_LA)':
+                  f'interchainedd_LDADD = {group_start} $(LIBBITCOIN_SERVER) $(interchained_bin_ldadd) {nedb} {group_end}',
+              'interchained_node_LDADD = $(LIBBITCOIN_SERVER) $(interchained_bin_ldadd) $(NEDB_FFI_LA)':
+                  f'interchained_node_LDADD = {group_start} $(LIBBITCOIN_SERVER) $(interchained_bin_ldadd) {nedb} {group_end}',
+              'interchained_wallet_LDADD = $(LIBBITCOIN_WALLET_TOOL) $(interchained_bin_ldadd) $(NEDB_FFI_LA)':
+                  f'interchained_wallet_LDADD = {group_start} $(LIBBITCOIN_WALLET_TOOL) $(interchained_bin_ldadd) {nedb} {group_end}',
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f'missing expected Makefile line: {old}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          grep '^interchainedd_LDADD = .*--start-group.*libnedb_ffi\.a.*--end-group' src/Makefile
+          grep '^interchained_wallet_LDADD = .*--start-group.*libnedb_ffi\.a.*--end-group' src/Makefile
 
           make -j"$JOBS"
           test -f "$D_BIN" && test -f "$CLI_BIN"
