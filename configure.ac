@@ -62,10 +62,13 @@ AC_PROG_CXX
 dnl ── NEDB FFI: Rust/Cargo optional ────────────────────────────────────────
 dnl cargo is needed for local/production builds to compile libnedb_ffi.a.
 dnl In CI the Linux Build uses a gcc-compiled C stub; cargo is not required.
-AC_CHECK_PROG([CARGO], [cargo], [yes], [no])
-AS_IF([test "x$CARGO" = "xyes"],
+dnl AC_PATH_PROG sets CARGO to the actual binary path (e.g. /Users/foo/.cargo/bin/cargo).
+dnl AC_CHECK_PROG sets it to the literal string "yes", which causes `$CARGO --version`
+dnl to run the BSD `yes` program on macOS — infinite output → xrealloc memory exhaustion.
+AC_PATH_PROG([CARGO], [cargo], [])
+AS_IF([test "x$CARGO" != "x"],
   [AC_MSG_CHECKING([cargo version])
-   CARGO_VERSION=$($CARGO --version 2>/dev/null)
+   CARGO_VERSION=$("$CARGO" --version 2>/dev/null)
    AC_MSG_RESULT([$CARGO_VERSION])],
   [AC_MSG_WARN([cargo not found -- NEDB FFI must be pre-built before make])])
 
