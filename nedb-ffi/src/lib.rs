@@ -134,6 +134,9 @@ pub extern "C" fn nedb_open(path: *const c_char, _dek: *const c_char) -> *mut Ne
         };
         let db_arc = Arc::new(db);
         Db::start_cold_scan(Arc::clone(&db_arc));
+        // Flush MANIFEST every 5s so metadata is durable during long sessions.
+        // Block-level WAL durability is handled in nedb_batch_write (flush_all).
+        Db::start_manifest_ticker(Arc::clone(&db_arc), 5_000);
         Box::into_raw(Box::new(NedbHandle { db: db_arc, coll }))
     }
 }
@@ -342,8 +345,12 @@ pub extern "C" fn nedb_batch_write(handle: *mut NedbHandle, ops: *const NedbOp, 
                 let _ = h.db.put(&h.coll, &kid, json!({"v": vh}), caused_by, None, None);
             }
         }
-        #[cfg(feature = "phase2")]
-        h.db.flush_manifest_if_dirty();
+        // Flush WAL + MANIFEST after every batch commit.
+        // This is the block-level durability point — equivalent to LevelDB's fsync.
+        // Individual nedb_put calls buffer to WAL (zero disk I/O per write).
+        // flush_all() = id_index.flush_write_buf() + flush_manifest()
+        // One disk flush per batch, not per write. Fast and durable.
+        h.db.flush_all();
         0
     }
 }
