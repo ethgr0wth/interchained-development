@@ -161,10 +161,19 @@ jobs:
             --with-miniupnpc \
           || { echo "=== config.log ==="; cat config.log || true; exit 1; }
 
-          # libnedb_ffi.a is linked via libnedb_ffi.la (libtool wrapper generated
-          # above). The .la file gives libtool placement in _LDADD ordering —
-          # it will appear AFTER libinterchained_wallet.a and libinterchained_server.a
-          # so GNU ld resolves nedb_* symbols with refs already outstanding.
+          # Inject libnedb_ffi.a via LIBS += in the generated src/Makefile.
+          # Rationale: libtool's binary-link reconstruction sorts archive buckets
+          # regardless of _LDADD order — .la files, raw .a files, and -l flags
+          # all end up reordered. The only position libtool cannot touch is $(LIBS),
+          # which automake emits AFTER $(LDADD) in every link rule:
+          #   $(LINK) $(objects) $(LDADD) $(LIBS)
+          # By appending to LIBS in the generated Makefile (post-configure), we
+          # guarantee NEDB FFI lands after libinterchained_wallet.a. --whole-archive
+          # ensures all symbols are included even if ld's scan position is imperfect.
+          # -Wl, prefix bypasses libtool's own archive-path processing.
+          NEDB_LIB="$(pwd)/nedb-ffi/target/release/libnedb_ffi.a"
+          echo "LIBS += -Wl,--whole-archive -Wl,${NEDB_LIB} -Wl,--no-whole-archive -lpthread -ldl" >> src/Makefile
+          echo "LIBS patch: $(grep '^LIBS +=' src/Makefile)"
           make -j"$JOBS"
           test -f "$D_BIN" && test -f "$CLI_BIN"
 
