@@ -168,9 +168,13 @@ jobs:
           # stubs (GetLastError, CloseHandle, WaitOnAddress, etc.) that Rust's
           # staticlib bundles alongside MinGW's own stubs.
           NEDB_LIB="$(pwd)/nedb-ffi/target/release/libnedb_ffi.a"
-          # -lsodium: required by libzmq (MSYS2 zeromq built with CURVE/libsodium)
+          # Explicit Boost + Windows + NEDB libs injected directly to guarantee
+          # they appear in every link command regardless of configure substitution.
+          # -lboost_thread-mt / -lboost_chrono-mt: MSYS2 Boost 1.91 -mt suffix
+          # -lboost_filesystem-mt: filesystem (not header-only in 1.91)
+          # -lsodium: required by libzmq CURVE support
           # -luserenv: required by Rust std (GetUserProfileDirectoryW)
-          echo "LIBS += -Wl,--allow-multiple-definition -Wl,--whole-archive,${NEDB_LIB},--no-whole-archive -lws2_32 -lbcrypt -lntdll -luserenv -lsodium" \
+          echo "LIBS += -Wl,--allow-multiple-definition -Wl,--whole-archive,${NEDB_LIB},--no-whole-archive -lboost_thread-mt -lboost_chrono-mt -lboost_filesystem-mt -lws2_32 -lbcrypt -lntdll -luserenv -lsodium" \
             >> src/Makefile
 
           make -j"$J"
