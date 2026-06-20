@@ -71,6 +71,7 @@ pub struct NedbHandle { inner: Mutex<NedbInner> }
 pub struct NedbHandle {
     db:   Arc<Db>,
     coll: String,
+    path: std::path::PathBuf,  // database root directory for direct file access
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -137,7 +138,7 @@ pub extern "C" fn nedb_open(path: *const c_char, _dek: *const c_char) -> *mut Ne
         // Flush MANIFEST every 5s so metadata is durable during long sessions.
         // Block-level WAL durability is handled in nedb_batch_write (flush_all).
         Db::start_manifest_ticker(Arc::clone(&db_arc), 5_000);
-        Box::into_raw(Box::new(NedbHandle { db: db_arc, coll }))
+        Box::into_raw(Box::new(NedbHandle { db: db_arc, coll, path: db_path.to_path_buf() }))
     }
 }
 
@@ -433,29 +434,83 @@ pub extern "C" fn nedb_scan(
 
     #[cfg(feature = "phase2")]
     {
-        let h       = unsafe { &*handle };
-        // db.list() reads all object files for the collection.
-        // Entries are (id_hex, value_hex) — decode to raw bytes before callback.
-        let nodes   = h.db.list(&h.coll);
-        let total   = nodes.len() as u64;
-        let mut progress: u64 = 0;
-        for node in nodes {
-            let k = match hex::decode(&node.id) { Ok(b) => b, Err(_) => continue };
-            let v = match hex::decode(node.data["v"].as_str().unwrap_or("")) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            progress += 1;
+        use rayon::prelude::*;
+        use std::fs;
+
+        let h = unsafe { &*handle };
+
+        // ── Step 1: collect ID index file paths (pure directory listing, no I/O) ──
+        // Layout: {db_path}/indexes/{coll}/id/{2-hex-shard}/{hex_encoded_key}
+        // Each shard dir holds files whose names ARE the hex-encoded binary keys.
+        let index_root = h.path.join("indexes").join(&h.coll).join("id");
+        let mut id_files: Vec<std::path::PathBuf> = Vec::new();
+
+        if let Ok(shards) = fs::read_dir(&index_root) {
+            for shard in shards.flatten() {
+                if shard.path().is_dir() {
+                    if let Ok(files) = fs::read_dir(shard.path()) {
+                        for f in files.flatten() {
+                            id_files.push(f.path());
+                        }
+                    }
+                }
+            }
+        }
+
+        let total = id_files.len() as u64;
+        if total == 0 { return 0; }
+
+        // ── Step 2: parallel read with rayon ────────────────────────────────────
+        // For each ID index file:
+        //   filename  = hex-encoded binary key
+        //   contents  = BLAKE2b hash that locates the object file
+        // Object file: {db_path}/objects/{hash[..2]}/{hash[2..]}
+        //   contents  = JSON {"data":{"v":"<hex value>"},...}
+        //
+        // rayon processes all files concurrently → SSD IOPS fully utilized.
+        let db_path_clone = h.path.clone();
+        let mut entries: Vec<(Vec<u8>, Vec<u8>)> = id_files
+            .par_iter()
+            .filter_map(|id_file| -> Option<(Vec<u8>, Vec<u8>)> {
+                // key ← filename (hex-encoded binary key)
+                let hex_key = id_file.file_name()?.to_str()?;
+                let k = hex::decode(hex_key).ok()?;
+
+                // hash ← file contents (points to object file)
+                let hash_hex = fs::read_to_string(id_file).ok()?;
+                let hash_hex = hash_hex.trim();
+                if hash_hex.len() < 4 { return None; }
+
+                // value ← object file → JSON → data["v"] (hex)
+                let obj_path = db_path_clone.join("objects")
+                    .join(&hash_hex[..2])
+                    .join(&hash_hex[2..]);
+                let obj_bytes = fs::read(&obj_path).ok()?;
+                let node: serde_json::Value = serde_json::from_slice(&obj_bytes).ok()?;
+                let v_hex = node["data"]["v"].as_str().unwrap_or("");
+                let v = hex::decode(v_hex).ok()?;
+
+                Some((k, v))
+            })
+            .collect();
+
+        // Sort by key so the C++ iterator-seek logic sees lexicographic order
+        // (matches the behaviour of the previous nedb_iter-based approach).
+        entries.par_sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+        // ── Step 3: sequential callback delivery with running progress ───────────
+        let delivered = entries.len() as u64;
+        for (progress, (k, v)) in entries.iter().enumerate() {
             unsafe {
                 callback(
                     k.as_ptr(), k.len(),
                     v.as_ptr(), v.len(),
-                    progress, total,
+                    (progress + 1) as u64, delivered,
                     ctx,
                 );
             }
         }
-        progress
+        delivered
     }
 }
 
