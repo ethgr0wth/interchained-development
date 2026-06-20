@@ -28,6 +28,7 @@ static const char DB_FLAG = 'F';
 static const char DB_REINDEX_FLAG = 'R';
 static const char DB_LAST_BLOCK = 'l';
 static const char DB_CHAIN_WORK_TIP = 'W';  //!< Persisted tip nChainWork for fast warm restart
+static const char DB_TIP_HASH        = 'T';  //!< Persisted tip block hash for fast warm restart
 
 namespace {
 
@@ -229,6 +230,62 @@ bool CBlockTreeDB::ReadTipChainWork(arith_uint256& chainwork) {
     if (!Read(DB_CHAIN_WORK_TIP, raw)) return false;
     chainwork = UintToArith256(raw);
     return true;
+}
+
+
+bool CBlockTreeDB::WriteTipHash(const uint256& hash) {
+    return Write(DB_TIP_HASH, hash);
+}
+
+bool CBlockTreeDB::ReadTipHash(uint256& hash) {
+    return Read(DB_TIP_HASH, hash);
+}
+
+bool CBlockTreeDB::LoadBlockIndexFromTip(
+    const uint256& tip_hash,
+    int depth,
+    std::function<CBlockIndex*(const uint256&)> insertBlockIndex)
+{
+    // Warm-boot path: walk backwards from the stored tip loading only `depth`
+    // block headers.  Each lookup is a single direct NEDB get — O(depth) reads
+    // instead of O(N) where N is the full chain length.
+    uint256 hash = tip_hash;
+    int loaded   = 0;
+
+    while (!hash.IsNull() && loaded < depth) {
+        if (ShutdownRequested()) return false;
+
+        std::pair<char, uint256> key = {DB_BLOCK_INDEX, hash};
+        CDiskBlockIndex diskindex;
+        if (!Read(key, diskindex)) {
+            LogPrintf("LoadBlockIndexFromTip: missing entry at %s after %d blocks — falling back to full scan\n",
+                      hash.GetHex().substr(0, 8), loaded);
+            return false;   // caller will fall back to full nedb_scan
+        }
+
+        CBlockIndex* pindexNew  = insertBlockIndex(diskindex.GetBlockHash());
+        pindexNew->pprev        = insertBlockIndex(diskindex.hashPrev);
+        pindexNew->nHeight      = diskindex.nHeight;
+        pindexNew->nFile        = diskindex.nFile;
+        pindexNew->nDataPos     = diskindex.nDataPos;
+        pindexNew->nUndoPos     = diskindex.nUndoPos;
+        pindexNew->nVersion     = diskindex.nVersion;
+        pindexNew->hashMerkleRoot = diskindex.hashMerkleRoot;
+        pindexNew->nTime        = diskindex.nTime;
+        pindexNew->nBits        = diskindex.nBits;
+        pindexNew->nNonce       = diskindex.nNonce;
+        pindexNew->nStatus      = diskindex.nStatus;
+        pindexNew->nTx          = diskindex.nTx;
+
+        hash = diskindex.hashPrev;
+        loaded++;
+
+        if (loaded % 500 == 0)
+            LogPrintf("LoadBlockIndex: warm boot %d / %d\n", loaded, depth);
+    }
+
+    LogPrintf("LoadBlockIndex: warm boot loaded %d headers from tip.\n", loaded);
+    return loaded > 0;
 }
 
 bool CBlockTreeDB::WriteBatchSync(const std::vector<std::pair<int, const CBlockFileInfo*> >& fileInfo, int nLastFile, const std::vector<const CBlockIndex*>& blockinfo) {
