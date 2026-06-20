@@ -4255,6 +4255,11 @@ bool BlockManager::LoadBlockIndex(
     // On a warm restart the last tip hash and chain work are persisted in NEDB.
     // Reading only the last 2016 block headers (one NEDB lookup each) takes
     // seconds rather than hours compared to scanning the full chain.
+    //
+    // warm_ptip / warm_tip_chainwork are declared here (outside the inner block)
+    // so the chain-work correction pass after the loop can use them.
+    CBlockIndex*  warm_ptip         = nullptr;
+    arith_uint256 warm_tip_chainwork;
     {
         uint256 tip_hash;
         arith_uint256 tip_chainwork;
@@ -4268,9 +4273,8 @@ bool BlockManager::LoadBlockIndex(
                 return this->InsertBlockIndex(hash);
             };
             if (blocktree.LoadBlockIndexFromTip(tip_hash, 2016, insertFn)) {
-                // Set cached chain work on the tip block so chain selection works.
-                CBlockIndex* ptip = InsertBlockIndex(tip_hash);
-                if (ptip) ptip->nChainWork = tip_chainwork;
+                warm_ptip         = InsertBlockIndex(tip_hash);
+                warm_tip_chainwork = tip_chainwork;
                 LogPrintf("LoadBlockIndex: warm boot complete — skipped full scan.\n");
                 goto post_load_index;
             }
