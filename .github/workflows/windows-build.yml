@@ -129,8 +129,13 @@ jobs:
           # We patch step-1 to set ax_lib + link_X=yes + BOOST_X_LIB, and
           # neutralise step-2 entirely. The real .a files are at /mingw64/lib
           # and will be linked at make time via BOOST_LIBS.
+          # Boost 1.91 MSYS2 MinGW64 quirks:
+          # - boost::system is fully header-only (no libboost_system.a shipped)
+          #   → BOOST_SYSTEM_LIB must be empty or the linker errors
+          # - boost::filesystem and boost::thread DO have static libs
+          # Patch both AX_BOOST_* guards (find + link) for each library.
           sed -i \
-            -e 's/as_fn_error.*Could not find a version of the Boost::System library.*/ax_lib=boost_system; link_system=yes; BOOST_SYSTEM_LIB="-lboost_system"/' \
+            -e 's/as_fn_error.*Could not find a version of the Boost::System library.*/ax_lib=; link_system=yes; BOOST_SYSTEM_LIB=""/' \
             -e 's/as_fn_error.*Could not find a version of the Boost::Filesystem library.*/ax_lib=boost_filesystem; link_filesystem=yes; BOOST_FILESYSTEM_LIB="-lboost_filesystem"/' \
             -e 's/as_fn_error.*Could not find a version of the Boost::Thread library.*/ax_lib=boost_thread; link_thread=yes; BOOST_THREAD_LIB="-lboost_thread"/' \
             -e 's/as_fn_error.*Could not find a version of the Boost::Chrono library.*/ax_lib=boost_chrono; link_chrono=yes; BOOST_CHRONO_LIB="-lboost_chrono"/' \
@@ -153,9 +158,12 @@ jobs:
             --without-miniupnpc \
             || { cat config.log; exit 1; }
 
-          # GNU ld whole-archive (Windows equivalent of macOS -force_load)
+          # GNU ld whole-archive (Windows equivalent of macOS -force_load).
+          # --allow-multiple-definition resolves duplicate Windows API import
+          # stubs (GetLastError, CloseHandle, WaitOnAddress, etc.) that Rust's
+          # staticlib bundles alongside MinGW's own stubs.
           NEDB_LIB="$(pwd)/nedb-ffi/target/release/libnedb_ffi.a"
-          echo "LIBS += -Wl,--whole-archive,${NEDB_LIB},--no-whole-archive -lws2_32 -lbcrypt -lntdll" \
+          echo "LIBS += -Wl,--allow-multiple-definition -Wl,--whole-archive,${NEDB_LIB},--no-whole-archive -lws2_32 -lbcrypt -lntdll" \
             >> src/Makefile
 
           make -j"$J"
