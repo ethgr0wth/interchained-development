@@ -122,16 +122,19 @@ jobs:
 
           ./autogen.sh
 
-          # Boost 1.74+ made boost::system / boost::filesystem header-only.
-          # The AX_BOOST_* link probes fail on MinGW64 with Boost 1.91 (nothing
-          # to link against for the probe), leaving BOOST_*_LIB="" which trips
-          # configure.ac's guards. Patch every Boost lib guard to fall back to
-          # the real library name — the .a files ARE present at /mingw64/lib.
+          # Boost 1.74+ / MSYS2 MinGW64: the AX_BOOST_* macros have a two-step
+          # guard in the generated configure:
+          #   1) "Could not find a version" — fires when ax_lib="" (ls glob empty)
+          #   2) "Could not link against $ax_lib !" — fires when link_X != yes
+          # We patch step-1 to set ax_lib + link_X=yes + BOOST_X_LIB, and
+          # neutralise step-2 entirely. The real .a files are at /mingw64/lib
+          # and will be linked at make time via BOOST_LIBS.
           sed -i \
-            -e 's/as_fn_error.*Could not find a version of the Boost::System library.*/BOOST_SYSTEM_LIB="-lboost_system"/' \
-            -e 's/as_fn_error.*Could not find a version of the Boost::Filesystem library.*/BOOST_FILESYSTEM_LIB="-lboost_filesystem"/' \
-            -e 's/as_fn_error.*Could not find a version of the Boost::Thread library.*/BOOST_THREAD_LIB="-lboost_thread -lboost_chrono"/' \
-            -e 's/as_fn_error.*Could not find a version of the Boost::Chrono library.*/BOOST_CHRONO_LIB="-lboost_chrono"/' \
+            -e 's/as_fn_error.*Could not find a version of the Boost::System library.*/ax_lib=boost_system; link_system=yes; BOOST_SYSTEM_LIB="-lboost_system"/' \
+            -e 's/as_fn_error.*Could not find a version of the Boost::Filesystem library.*/ax_lib=boost_filesystem; link_filesystem=yes; BOOST_FILESYSTEM_LIB="-lboost_filesystem"/' \
+            -e 's/as_fn_error.*Could not find a version of the Boost::Thread library.*/ax_lib=boost_thread; link_thread=yes; BOOST_THREAD_LIB="-lboost_thread"/' \
+            -e 's/as_fn_error.*Could not find a version of the Boost::Chrono library.*/ax_lib=boost_chrono; link_chrono=yes; BOOST_CHRONO_LIB="-lboost_chrono"/' \
+            -e 's/as_fn_error.*Could not link against \$ax_lib.*/true  # MinGW64 Boost link-test bypassed/' \
             configure
 
           # Use versioned static archives — the unversioned libdb.a / libdb_cxx.a
