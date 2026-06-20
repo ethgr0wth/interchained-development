@@ -134,8 +134,12 @@ jobs:
             -e 's/as_fn_error.*Could not find a version of the Boost::Chrono library.*/BOOST_CHRONO_LIB="-lboost_chrono"/' \
             configure
 
+          # Use versioned static archives — the unversioned libdb.a / libdb_cxx.a
+          # are thin import libs (DLL stubs, ~1MB). The full static archives are
+          # libdb-6.2.a / libdb_cxx-6.2.a (~2-2.5MB). Pass as direct paths so
+          # the configure link test picks up real code, not the DLL shims.
           BDB_CFLAGS="-I${BDB_PREFIX}/include" \
-          BDB_LIBS="-L${BDB_PREFIX}/lib -ldb_cxx -ldb" \
+          BDB_LIBS="${BDB_PREFIX}/lib/libdb_cxx-6.2.a ${BDB_PREFIX}/lib/libdb-6.2.a" \
           ./configure \
             --enable-wallet \
             --with-incompatible-bdb \
