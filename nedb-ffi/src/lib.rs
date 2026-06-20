@@ -387,6 +387,79 @@ pub extern "C" fn nedb_free_str(s: *mut c_char) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// C API — bulk scan  (replaces iterator for startup block-index loading)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Callback signature for nedb_scan.
+pub type NedbScanFn = unsafe extern "C" fn(
+    key:      *const c_uchar, key_len: usize,
+    val:      *const c_uchar, val_len: usize,
+    progress: u64,
+    total:    u64,
+    ctx:      *mut std::ffi::c_void,
+);
+
+/// Scan every entry in the database, invoking `callback` for each one.
+///
+/// Delivers progress = 1..=N and total = N so callers can log or display
+/// a progress bar without waiting for the entire load to complete first.
+///
+/// Returns the total number of entries scanned, or 0 on error.
+#[no_mangle]
+pub extern "C" fn nedb_scan(
+    handle:   *mut NedbHandle,
+    callback: NedbScanFn,
+    ctx:      *mut std::ffi::c_void,
+) -> u64 {
+    if handle.is_null() { return 0; }
+
+    #[cfg(not(feature = "phase2"))]
+    {
+        let inner   = unsafe { &*handle }.inner.lock().unwrap();
+        let total   = inner.store.len() as u64;
+        for (progress, (k, v)) in inner.store.iter().enumerate() {
+            unsafe {
+                callback(
+                    k.as_ptr(), k.len(),
+                    v.as_ptr(), v.len(),
+                    (progress + 1) as u64, total,
+                    ctx,
+                );
+            }
+        }
+        total
+    }
+
+    #[cfg(feature = "phase2")]
+    {
+        let h       = unsafe { &*handle };
+        // db.list() reads all object files for the collection.
+        // Entries are (id_hex, value_hex) — decode to raw bytes before callback.
+        let nodes   = h.db.list(&h.coll);
+        let total   = nodes.len() as u64;
+        let mut progress: u64 = 0;
+        for node in nodes {
+            let k = match hex::decode(&node.id) { Ok(b) => b, Err(_) => continue };
+            let v = match hex::decode(node.data["v"].as_str().unwrap_or("")) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            progress += 1;
+            unsafe {
+                callback(
+                    k.as_ptr(), k.len(),
+                    v.as_ptr(), v.len(),
+                    progress, total,
+                    ctx,
+                );
+            }
+        }
+        progress
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // C API — iterator
 // ─────────────────────────────────────────────────────────────────────────────
 
