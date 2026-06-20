@@ -319,6 +319,42 @@ workflows:
           arch -x86_64 make -j"$J"
           test -f src/interchainedd && file src/interchainedd
 
+      - name: Sign & Notarize interchainedd (Developer ID — Interchained LLC)
+        script: |
+          # Discover the Developer ID Application cert from Elara's keychain entry
+          SIGN_ID=$(security find-identity -v -p codesigning \
+            | grep "Developer ID Application" | head -1 | awk '{print $2}')
+          if [ -z "$SIGN_ID" ]; then
+            echo "⚠️  No Developer ID Application cert found — skipping signing"
+            exit 0
+          fi
+          echo "Signing with: $SIGN_ID"
+
+          # Sign both binaries — --options runtime required for notarization
+          codesign --sign "$SIGN_ID" \
+                   --options runtime \
+                   --timestamp \
+                   --force \
+                   src/interchainedd src/interchained-cli
+          codesign --verify --verbose src/interchainedd
+          spctl --assess --type exec --verbose src/interchainedd 2>&1 || true
+
+          # Notarize via App Store Connect API key (same key Elara uses)
+          if [ -n "${APP_STORE_CONNECT_PRIVATE_KEY:-}" ]; then
+            echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/asc_key.p8
+            zip -j /tmp/interchainedd_notarize.zip src/interchainedd
+            xcrun notarytool submit /tmp/interchainedd_notarize.zip \
+              --key /tmp/asc_key.p8 \
+              --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+              --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+              --wait
+            xcrun stapler staple src/interchainedd
+            rm -f /tmp/asc_key.p8 /tmp/interchainedd_notarize.zip
+            echo "✅ Notarized and stapled"
+          else
+            echo "ℹ️  APP_STORE_CONNECT_PRIVATE_KEY not set — skipping notarization"
+          fi
+
       - name: Package x86_64 binary (for iMac Intel)
         script: |
           J_TAG="${FCI_TAG:-${CM_COMMIT:0:8}}"
