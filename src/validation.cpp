@@ -4325,8 +4325,30 @@ bool BlockManager::LoadBlockIndex(
         }
         if (pindex->nStatus & BLOCK_FAILED_MASK && (!pindexBestInvalid || pindex->nChainWork > pindexBestInvalid->nChainWork))
             pindexBestInvalid = pindex;
-        if (pindex->pprev)
+        // Lazy on-demand ancestor loading for warm-boot:
+        // When pprev is a stub outside the loaded window, walk backwards
+        // fetching from NEDB until BuildSkip() has the full ancestor chain.
+        if (pindex->pprev) {
+            CBlockIndex* p = pindex->pprev;
+            while (p && p->pprev == nullptr && p->nHeight > 0) {
+                CDiskBlockIndex di;
+                if (!blocktree.Read(std::make_pair(DB_BLOCK_INDEX, p->GetBlockHash()), di)) break;
+                p->pprev          = InsertBlockIndex(di.hashPrev);
+                p->nHeight        = di.nHeight;
+                p->nFile          = di.nFile;
+                p->nDataPos       = di.nDataPos;
+                p->nUndoPos       = di.nUndoPos;
+                p->nVersion       = di.nVersion;
+                p->hashMerkleRoot = di.hashMerkleRoot;
+                p->nTime          = di.nTime;
+                p->nBits          = di.nBits;
+                p->nNonce         = di.nNonce;
+                p->nStatus        = di.nStatus;
+                p->nTx            = di.nTx;
+                p                 = p->pprev;
+            }
             pindex->BuildSkip();
+        }
         if (pindex->IsValid(BLOCK_VALID_TREE) && (pindexBestHeader == nullptr || CBlockIndexWorkComparator()(pindexBestHeader, pindex)))
             pindexBestHeader = pindex;
     }
