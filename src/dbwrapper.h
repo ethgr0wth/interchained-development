@@ -246,6 +246,11 @@ private:
 
     std::vector<unsigned char> CreateObfuscateKey() const;
 
+
+protected:
+    //! Expose raw NEDB handle to subclasses (e.g. CBlockTreeDB → nedb_scan).
+    NedbHandle* GetHandle() const { return pdb; }
+
 public:
     /**
      * @param path       Filesystem path for the NEDB data directory.
