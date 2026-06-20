@@ -54,7 +54,7 @@ jobs:
             mingw-w64-x86_64-db
             perl
 
-      - name: Verify BDB from MSYS2
+      - name: Verify BDB and Boost from MSYS2
         run: |
           echo "=== BDB headers ==="
           ls -lah /mingw64/include/db*.h
@@ -62,6 +62,8 @@ jobs:
           ls -lah /mingw64/lib/libdb*.a /mingw64/lib/libdb*.dll.a 2>/dev/null || true
           echo "=== BDB version ==="
           grep DB_VERSION_STRING /mingw64/include/db.h | head -3
+          echo "=== Boost static libs ==="
+          ls /mingw64/lib/libboost_*.a 2>/dev/null | sort
 
       - name: Install Rust stable + x86_64-pc-windows-gnu target
         shell: pwsh
@@ -134,11 +136,14 @@ jobs:
           #   → BOOST_SYSTEM_LIB must be empty or the linker errors
           # - boost::filesystem and boost::thread DO have static libs
           # Patch both AX_BOOST_* guards (find + link) for each library.
+          # MSYS2 MinGW64 Boost 1.91: static libs use -mt suffix
+          # (e.g. libboost_filesystem-mt.a, libboost_thread-mt.a).
+          # boost::system is fully header-only — no lib file at all.
           sed -i \
             -e 's/as_fn_error.*Could not find a version of the Boost::System library.*/ax_lib=; link_system=yes; BOOST_SYSTEM_LIB=""/' \
-            -e 's/as_fn_error.*Could not find a version of the Boost::Filesystem library.*/ax_lib=boost_filesystem; link_filesystem=yes; BOOST_FILESYSTEM_LIB="-lboost_filesystem"/' \
-            -e 's/as_fn_error.*Could not find a version of the Boost::Thread library.*/ax_lib=boost_thread; link_thread=yes; BOOST_THREAD_LIB="-lboost_thread"/' \
-            -e 's/as_fn_error.*Could not find a version of the Boost::Chrono library.*/ax_lib=boost_chrono; link_chrono=yes; BOOST_CHRONO_LIB="-lboost_chrono"/' \
+            -e 's/as_fn_error.*Could not find a version of the Boost::Filesystem library.*/ax_lib=boost_filesystem-mt; link_filesystem=yes; BOOST_FILESYSTEM_LIB="-lboost_filesystem-mt"/' \
+            -e 's/as_fn_error.*Could not find a version of the Boost::Thread library.*/ax_lib=boost_thread-mt; link_thread=yes; BOOST_THREAD_LIB="-lboost_thread-mt"/' \
+            -e 's/as_fn_error.*Could not find a version of the Boost::Chrono library.*/ax_lib=boost_chrono-mt; link_chrono=yes; BOOST_CHRONO_LIB="-lboost_chrono-mt"/' \
             -e 's/as_fn_error.*Could not link against \$ax_lib.*/true  # MinGW64 Boost link-test bypassed/' \
             configure
 
@@ -163,7 +168,7 @@ jobs:
           # stubs (GetLastError, CloseHandle, WaitOnAddress, etc.) that Rust's
           # staticlib bundles alongside MinGW's own stubs.
           NEDB_LIB="$(pwd)/nedb-ffi/target/release/libnedb_ffi.a"
-          echo "LIBS += -Wl,--allow-multiple-definition -Wl,--whole-archive,${NEDB_LIB},--no-whole-archive -lws2_32 -lbcrypt -lntdll" \
+          echo "LIBS += -Wl,--allow-multiple-definition -Wl,--whole-archive,${NEDB_LIB},--no-whole-archive -lws2_32 -lbcrypt -lntdll -luserenv" \
             >> src/Makefile
 
           make -j"$J"
