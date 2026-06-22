@@ -22,7 +22,7 @@ crate-type = ["staticlib", "cdylib"]
 #   cargo build --release --no-default-features
 [features]
 default = ["phase2"]
-phase2  = ["nedb-core-v2", "serde_json", "rayon"]
+phase2  = ["nedb-engine",  "serde_json", "rayon"]
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 [dependencies]
@@ -30,7 +30,7 @@ hex    = "0.4"
 blake2 = { version = "0.10", optional = true }  # Phase 1 only (not needed in phase2)
 
 # Phase 2: real NEDB DAG engine (activated by default).
-nedb-core-v2 = { git = "https://github.com/Eth-Interchained/nedb", package = "nedb-core-v2", optional = true }
+nedb-engine  = { git = "https://github.com/Eth-Interchained/nedb", package = "nedb-engine",  optional = true }
 serde_json   = { version = "1", optional = true }
 rayon        = { version = "1", optional = true }  # parallel scan for startup
 
