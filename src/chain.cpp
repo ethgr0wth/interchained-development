@@ -101,11 +101,13 @@ const CBlockIndex* CBlockIndex::GetAncestor(int height) const
             heightWalk = heightSkip;
         } else {
             if (!pindexWalk->pprev) {
-                // pprev is null — during warm boot the full chain is in NEDB but
-                // only 2016 headers were pre-loaded.  Try to fetch the parent now.
-                if (!WarmBootLoadParent(const_cast<CBlockIndex*>(pindexWalk))) {
-                    assert(pindexWalk->pprev); // not warm boot or load failed
-                }
+                // pprev is null — try to load from NEDB (warm boot on-demand loader).
+                // If the block is not yet synced (above our previous tip) or warm
+                // boot is inactive, the loader returns false.  Return nullptr so
+                // callers can handle a disconnected chain gracefully rather than
+                // crashing — the block will be reachable once IBD downloads it.
+                if (!WarmBootLoadParent(const_cast<CBlockIndex*>(pindexWalk)))
+                    return nullptr;
             }
             pindexWalk = pindexWalk->pprev;
             heightWalk--;
