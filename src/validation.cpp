@@ -4251,43 +4251,11 @@ bool BlockManager::LoadBlockIndex(
     CBlockTreeDB& blocktree,
     std::set<CBlockIndex*, CBlockIndexWorkComparator>& block_index_candidates)
 {
-    // ── Warm-boot fast path ────────────────────────────────────────────────────
-    // On a warm restart the last tip hash and chain work are persisted in NEDB.
-    // Reading only the last 2016 block headers (one NEDB lookup each) takes
-    // seconds rather than hours compared to scanning the full chain.
-    //
-    // warm_ptip / warm_tip_chainwork are declared here (outside the inner block)
-    // so the chain-work correction pass after the loop can use them.
-    CBlockIndex*  warm_ptip         = nullptr;
-    arith_uint256 warm_tip_chainwork;
-    {
-        uint256 tip_hash;
-        arith_uint256 tip_chainwork;
-        if (blocktree.ReadTipHash(tip_hash) &&
-            blocktree.ReadTipChainWork(tip_chainwork) &&
-            !tip_hash.IsNull())
-        {
-            LogPrintf("LoadBlockIndex: warm boot from tip %s\n",
-                      tip_hash.GetHex().substr(0, 16));
-            auto insertFn = [this](const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
-                return this->InsertBlockIndex(hash);
-            };
-            if (blocktree.LoadBlockIndexFromTip(tip_hash, 2016, insertFn)) {
-                warm_ptip         = InsertBlockIndex(tip_hash);
-                warm_tip_chainwork = tip_chainwork;
-                LogPrintf("LoadBlockIndex: warm boot complete — skipped full scan.\n");
-                goto post_load_index;
-            }
-            LogPrintf("LoadBlockIndex: warm boot fallback to full scan.\n");
-            m_block_index.clear();   // discard partial state before full scan
-        }
-    }
-
-    // ── Full scan (first run, reindex, or warm-boot miss) ─────────────────────
+    // Full scan — WriteTipHash/ReadTipHash/LoadBlockIndexFromTip infrastructure
+    // is ready for Phase 2 peer-consensus warm boot.
     if (!blocktree.LoadBlockIndexGuts(consensus_params, [this](const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main) { return this->InsertBlockIndex(hash); }))
         return false;
 
-    post_load_index:
     LogPrintf("LoadBlockIndex: building chain state from %u headers...\n",
               m_block_index.size());
 
