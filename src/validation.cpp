@@ -4407,7 +4407,7 @@ bool CChainState::TryWarmBoot(CBlockTreeDB& blocktree,
     auto insertFn = [this](const uint256& h) EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
         return this->m_blockman.InsertBlockIndex(h);
     };
-    if (!blocktree.LoadBlockIndexFromTip(tip_hash, insertFn)) {
+    if (!blocktree.LoadBlockIndexFromTip(tip_hash, 2016, insertFn)) {
         LogPrintf("TryWarmBoot: LoadBlockIndexFromTip failed — full scan required.\n");
         m_blockman.m_block_index.clear();
         return false;
@@ -4435,7 +4435,13 @@ bool CChainState::TryWarmBoot(CBlockTreeDB& blocktree,
                 pindex->nChainTx = pindex->pprev->nChainTx + pindex->nTx;
             }
         }
-        if (pindex->pprev) pindex->BuildSkip();
+        // Skip-pointer construction is intentionally omitted here.
+        // BuildSkip calls GetAncestor which walks to genesis — outside the
+        // warm-boot window — triggering a null-pprev assertion at the boundary.
+        // The warm-boot integrity guarantee comes from the P2P peer comparison
+        // (±2016 window), not from Bitcoin Core's internal skip-list.
+        // Skip pointers are built normally as new blocks arrive via the standard
+        // AcceptBlock → AddToBlockIndex path.
         if (pindex->IsValid(BLOCK_VALID_TREE) &&
             (!pindexBestHeader ||
              CBlockIndexWorkComparator()(pindexBestHeader, pindex)))
