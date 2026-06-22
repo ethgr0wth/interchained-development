@@ -3304,12 +3304,10 @@ CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& block)
     pindexNew->nTimeMax = (pindexNew->pprev ? std::max(pindexNew->pprev->nTimeMax, pindexNew->nTime) : pindexNew->nTime);
     pindexNew->nChainWork = (pindexNew->pprev ? pindexNew->pprev->nChainWork : 0) + GetBlockProof(*pindexNew);
     pindexNew->RaiseValidity(BLOCK_VALID_TREE);
-    if (pindexBestHeader == nullptr || pindexBestHeader->nChainWork < pindexNew->nChainWork) {
+    if (pindexBestHeader == nullptr || pindexBestHeader->nChainWork < pindexNew->nChainWork)
         pindexBestHeader = pindexNew;
-        // Persist tip hash + chain work so warm restarts can boot in O(2016) reads.
-        pblocktree->WriteTipHash(pindexNew->GetBlockHash());
-        pblocktree->WriteTipChainWork(pindexNew->nChainWork);
-    }
+    // Tip hash + chain work are written atomically in WriteBatchSync alongside
+    // the block index entry, so they always point to a block that exists in NEDB.
 
     setDirtyBlockIndex.insert(pindexNew);
 

@@ -299,9 +299,22 @@ bool CBlockTreeDB::WriteBatchSync(const std::vector<std::pair<int, const CBlockF
         batch.Write(std::make_pair(DB_BLOCK_FILES, it->first), *it->second);
     }
     batch.Write(DB_LAST_BLOCK, nLastFile);
+
+    // Find the block with the highest chain work in this batch — that becomes
+    // the new persisted tip.  Writing tip hash + chain work in the same atomic
+    // batch as the block index entries guarantees they are always consistent:
+    // the tip hash will only point to a block that exists in NEDB.
+    const CBlockIndex* pBestInBatch = nullptr;
     for (std::vector<const CBlockIndex*>::const_iterator it=blockinfo.begin(); it != blockinfo.end(); it++) {
         batch.Write(std::make_pair(DB_BLOCK_INDEX, (*it)->GetBlockHash()), CDiskBlockIndex(*it));
+        if (!pBestInBatch || (*it)->nChainWork > pBestInBatch->nChainWork)
+            pBestInBatch = *it;
     }
+    if (pBestInBatch) {
+        batch.Write(DB_TIP_HASH,       pBestInBatch->GetBlockHash());
+        batch.Write(DB_CHAIN_WORK_TIP, pBestInBatch->nChainWork);
+    }
+
     return WriteBatch(batch, true);
 }
 
