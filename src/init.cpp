@@ -1617,10 +1617,24 @@ bool AppInitMain(const util::Ref& context, NodeContext& node, interfaces::BlockA
                 // block file from disk.
                 // Note that it also sets fReindex based on the disk flag!
                 // From here on out fReindex and fReset mean something different!
-                if (!chainman.LoadBlockIndex(chainparams)) {
-                    if (ShutdownRequested()) break;
-                    strLoadError = _("Error loading block database");
-                    break;
+                // ── Phase 2: Warm-boot peer-consensus startup ──────────────────────
+                // Try loading only the last 2016 headers from the NEDB-persisted tip.
+                // If successful, startup takes seconds instead of scanning the full
+                // chain. Falls back to the full LoadBlockIndex scan on any failure.
+                {
+                    bool warm_ok = false;
+                    {
+                        LOCK(cs_main);
+                        warm_ok = chainman.ActiveChainstate().TryWarmBoot(
+                            *pblocktree, chainparams.GetConsensus());
+                    }
+                    if (!warm_ok) {
+                        if (!chainman.LoadBlockIndex(chainparams)) {
+                            if (ShutdownRequested()) break;
+                            strLoadError = _("Error loading block database");
+                            break;
+                        }
+                    }
                 }
 
                 // If the loaded chain has a wrong genesis, bail out immediately
