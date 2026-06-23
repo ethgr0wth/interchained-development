@@ -1678,7 +1678,7 @@ bool AppInitMain(const util::Ref& context, NodeContext& node, interfaces::BlockA
                     pblocktree->ReadFlag("nedb_clean_shutdown", clean_shutdown);
                     pblocktree->WriteFlag("nedb_clean_shutdown", false);
                     const bool verify_requested = gArgs.GetBoolArg("-verifynedb", DEFAULT_VERIFY_NEDB);
-                    const bool want_verify = verify_requested && !fReset && !fReindex && !clean_shutdown;
+                    const bool want_verify = verify_requested && !fReset && !fReindex && !fReindexChainState && !clean_shutdown;
                     const int64_t t_verify0 = GetTimeMillis();
                     const int nedb_problems = want_verify ? pblocktree->Verify() : -1;
                     if (nedb_problems > 0) {
