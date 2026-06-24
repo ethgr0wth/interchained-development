@@ -150,15 +150,31 @@ extern std::atomic_bool fReindex;
  * g_warm_boot_active     — true from a successful TryWarmBoot until the seam is
  *                          verified (or the watchdog gives up); keeps the NEDB
  *                          on-demand ancestor loader and the seam check live.
- * g_warm_boot_mismatch   — set true if the canonical chain provably disagrees
- *                          with our tip (reserved for active fork detection).
+ * g_warm_boot_mismatch   — set true by ProcessHeadersMessage when a peer presents
+ *                          a strictly-more-work valid header chain whose block at
+ *                          OUR warm-boot tip height is a different hash — i.e. our
+ *                          tip is provably NOT on the most-work chain. Distinct
+ *                          from "unconfirmed" (the 2-minute watchdog timeout =
+ *                          absence of evidence): mismatch is positive proof and is
+ *                          acted on at once (durable nedb_warmboot_unconfirmed flag
+ *                          → full resync from 0 on the next controlled startup).
+ * g_warm_boot_tip_chainwork — cumulative work of the warm-boot tip (the persisted
+ *                          value), so the seam can compare a peer's chain work
+ *                          without a separate index lookup.
  */
 extern uint256           g_warm_boot_tip_hash;
 extern uint256           g_warm_boot_base_hash;
 extern int               g_warm_boot_tip_height;
+extern arith_uint256     g_warm_boot_tip_chainwork;
 extern std::atomic<bool> g_warm_boot_verified;
 extern std::atomic<bool> g_warm_boot_active;
 extern std::atomic<bool> g_warm_boot_mismatch;
+
+/** Persist the durable "warm boot could not confirm the tip" flag
+ *  (nedb_warmboot_unconfirmed) so the next startup full-scans from height 0.
+ *  Defined in validation.cpp (where pblocktree lives); callable from
+ *  net_processing on a proven mismatch without pulling in txdb.h. */
+void WarmBootMarkUnconfirmed();
 /** Whether there are dedicated script-checking threads running.
  * False indicates all script checking is done on the main threadMessageHandler thread.
  */
