@@ -144,8 +144,9 @@ std::atomic_bool fReindex(false);
 uint256           g_warm_boot_tip_hash;        // written once by TryWarmBoot, read by net_processing
 uint256           g_warm_boot_base_hash;        // oldest header in the loaded window (Proof-of-Prefix base)
 int               g_warm_boot_tip_height{0};    // height of the warm-boot tip
+arith_uint256     g_warm_boot_tip_chainwork;    // cumulative work of the warm-boot tip (persisted value)
 std::atomic<bool> g_warm_boot_verified{false}; // set when the canonical-chain seam closes
-std::atomic<bool> g_warm_boot_mismatch{false}; // set if the canonical chain provably disagrees with our tip
+std::atomic<bool> g_warm_boot_mismatch{false}; // set when a peer proves our tip is off the most-work chain
 bool fHavePruned = false;
 bool fPruneMode = false;
 bool fRequireStandard = true;
@@ -4678,8 +4679,9 @@ bool CChainState::TryWarmBoot(CBlockTreeDB& blocktree,
 
     // Record the tip hash + height so ProcessHeadersMessage can close the
     // Proof-of-Prefix seam when a peer's canonical chain is shown to contain it.
-    g_warm_boot_tip_hash   = tip_hash;
-    g_warm_boot_tip_height = ptip->nHeight;
+    g_warm_boot_tip_hash      = tip_hash;
+    g_warm_boot_tip_height    = ptip->nHeight;
+    g_warm_boot_tip_chainwork = tip_chainwork;
 
     // Record the bottom of the loaded window (oldest real header). verify()
     // already proved base..tip is an intact BLAKE2b-linked chain locally, so
@@ -4700,6 +4702,15 @@ bool CChainState::TryWarmBoot(CBlockTreeDB& blocktree,
               tip_hash.GetHex().substr(0, 12), ptip->nHeight,
               tip_chainwork.GetHex().substr(0, 16));
     return true;
+}
+
+// Persist the durable "tip unconfirmed" flag so the next startup full-scans from
+// height 0. Mirrors the Proof-of-Prefix watchdog (init.cpp), but callable the
+// instant a mismatch is PROVEN — net_processing acts on positive evidence without
+// waiting out the 2-minute watchdog, and without any live/destructive action.
+void WarmBootMarkUnconfirmed()
+{
+    if (pblocktree) pblocktree->WriteFlag("nedb_warmboot_unconfirmed", true);
 }
 
 void BlockManager::Unload() {
