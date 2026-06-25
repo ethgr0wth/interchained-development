@@ -1929,6 +1929,40 @@ void PeerManager::ProcessHeadersMessage(CNode& pfrom, const std::vector<CBlockHe
         assert(pindexLast);
         UpdateBlockAvailability(pfrom.GetId(), pindexLast->GetBlockHash());
 
+        // ── NEDB Proof-of-Prefix mismatch detection ─────────────────────────
+        // The top-of-function seam closes warm boot when a peer's chain CONTAINS
+        // our tip. This is the negative case: if a peer presents a strictly-more-
+        // work valid header chain whose block AT our tip height is a different
+        // hash, our warm-boot tip is provably NOT on the most-work chain (an
+        // orphaned/forked tip) — not merely "unconfirmed". We record it at once
+        // and mark for a full resync from height 0 on the next (controlled)
+        // startup. We do NOT wipe or reorg live here — that matches the watchdog's
+        // safety doctrine; we only act on proof immediately instead of waiting out
+        // the 2-minute watchdog. GetAncestor() returns null if the peer's chain is
+        // not linked down to our tip height, in which case we draw no conclusion.
+        // Anchor nodes are excluded: a declared root of trust does not defer to a
+        // peer about its own canonical tip (it has no external seam by definition),
+        // so a peer must never be able to flag a seed's tip for resync — that would
+        // be a DoS on exactly the nodes -anchor protects. Mirrors the seam-verify
+        // gate above, which also skips anchors.
+        if (g_warm_boot_active.load() && !g_warm_boot_verified.load() &&
+            !g_warm_boot_anchor.load() && !g_warm_boot_mismatch.load() &&
+            !g_warm_boot_tip_hash.IsNull() &&
+            pindexLast->nHeight >= g_warm_boot_tip_height &&
+            pindexLast->nChainWork > g_warm_boot_tip_chainwork)
+        {
+            const CBlockIndex* at_tip_height = pindexLast->GetAncestor(g_warm_boot_tip_height);
+            if (at_tip_height && at_tip_height->GetBlockHash() != g_warm_boot_tip_hash) {
+                g_warm_boot_mismatch.store(true);
+                LogPrintf("WarmBoot MISMATCH: peer=%d presents a strictly-more-work chain whose block at our tip height %d is %s, not our warm-boot tip %s — tip is NOT on the most-work chain. Marking for a full resync from height 0 on next start.\n",
+                          pfrom.GetId(),
+                          g_warm_boot_tip_height,
+                          at_tip_height->GetBlockHash().GetHex().substr(0, 16),
+                          g_warm_boot_tip_hash.GetHex().substr(0, 16));
+                WarmBootMarkUnconfirmed();
+            }
+        }
+
         // From here, pindexBestKnownBlock should be guaranteed to be non-null,
         // because it is set in UpdateBlockAvailability. Some nullptr checks
         // are still present, however, as belt-and-suspenders.

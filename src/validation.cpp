@@ -144,8 +144,9 @@ std::atomic_bool fReindex(false);
 uint256           g_warm_boot_tip_hash;        // written once by TryWarmBoot, read by net_processing
 uint256           g_warm_boot_base_hash;        // oldest header in the loaded window (Proof-of-Prefix base)
 int               g_warm_boot_tip_height{0};    // height of the warm-boot tip
+arith_uint256     g_warm_boot_tip_chainwork;    // cumulative work of the warm-boot tip (persisted value)
 std::atomic<bool> g_warm_boot_verified{false}; // set when the canonical-chain seam closes
-std::atomic<bool> g_warm_boot_mismatch{false}; // set if the canonical chain provably disagrees with our tip
+std::atomic<bool> g_warm_boot_mismatch{false}; // set when a peer proves our tip is off the most-work chain
 std::atomic<bool> g_warm_boot_anchor{false};   // set by -anchor: this node is a root of trust (no external seam)
 bool fHavePruned = false;
 bool fPruneMode = false;
@@ -1987,6 +1988,8 @@ static int64_t nTimeIndex = 0;
 static int64_t nTimeCallbacks = 0;
 static int64_t nTimeTotal = 0;
 static int64_t nBlocksTotal = 0;
+//! Running total of coins cold-read by the -coinprefetch input batcher (cs_main).
+static int64_t nCoinsPrefetched = 0;
 
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
@@ -2737,6 +2740,35 @@ bool CChainState::ConnectTip(BlockValidationState& state, const CChainParams& ch
     int64_t nTime2 = GetTimeMicros(); nTimeReadFromDisk += nTime2 - nTime1;
     int64_t nTime3;
     LogPrint(BCLog::BENCH, "  - Load block from disk: %.2fms [%.2fs]\n", (nTime2 - nTime1) * MILLI, nTimeReadFromDisk * MICRO);
+
+    // ── Input-coin prefetch (NEDB batch read) ──────────────────────────────
+    // Before validating this block, pull every output it spends into the
+    // chainstate cache with ONE parallel NEDB batch read, instead of letting
+    // ConnectBlock fault them in one-by-one (each a separate cold NEDB lookup)
+    // as it walks the inputs in series — the dominant cost when syncing block
+    // by block. PrefetchCoins() only inserts the same clean cache entries an
+    // on-demand fetch would, so the connected state is byte-identical: this
+    // changes sync speed, never consensus. The block was already read above, so
+    // there is no extra disk read. Gated to initial block download (steady-state
+    // single-block connects gain nothing) and off by default (-coinprefetch),
+    // as this path is consensus-adjacent.
+    static const bool fCoinPrefetch = gArgs.GetBoolArg("-coinprefetch", DEFAULT_COIN_PREFETCH);
+    if (fCoinPrefetch && IsInitialBlockDownload()) {
+        std::vector<COutPoint> prefetch;
+        prefetch.reserve(blockConnecting.vtx.size());
+        for (const auto& ptx : blockConnecting.vtx) {
+            if (ptx->IsCoinBase()) continue;
+            for (const CTxIn& txin : ptx->vin) {
+                prefetch.push_back(txin.prevout);
+            }
+        }
+        if (!prefetch.empty()) {
+            size_t cold = CoinsTip().PrefetchCoins(prefetch);
+            nCoinsPrefetched += (int64_t)cold;
+            LogPrint(BCLog::BENCH, "  - Prefetch inputs: %u requested, %u cold-read [%lld total]\n",
+                     (unsigned)prefetch.size(), (unsigned)cold, (long long)nCoinsPrefetched);
+        }
+    }
     {
         CCoinsViewCache view(&CoinsTip());
         bool rv = ConnectBlock(blockConnecting, state, pindexNew, view, chainparams);
@@ -4648,8 +4680,9 @@ bool CChainState::TryWarmBoot(CBlockTreeDB& blocktree,
 
     // Record the tip hash + height so ProcessHeadersMessage can close the
     // Proof-of-Prefix seam when a peer's canonical chain is shown to contain it.
-    g_warm_boot_tip_hash   = tip_hash;
-    g_warm_boot_tip_height = ptip->nHeight;
+    g_warm_boot_tip_hash      = tip_hash;
+    g_warm_boot_tip_height    = ptip->nHeight;
+    g_warm_boot_tip_chainwork = tip_chainwork;
 
     // Record the bottom of the loaded window (oldest real header). verify()
     // already proved base..tip is an intact BLAKE2b-linked chain locally, so
@@ -4670,6 +4703,15 @@ bool CChainState::TryWarmBoot(CBlockTreeDB& blocktree,
               tip_hash.GetHex().substr(0, 12), ptip->nHeight,
               tip_chainwork.GetHex().substr(0, 16));
     return true;
+}
+
+// Persist the durable "tip unconfirmed" flag so the next startup full-scans from
+// height 0. Mirrors the Proof-of-Prefix watchdog (init.cpp), but callable the
+// instant a mismatch is PROVEN — net_processing acts on positive evidence without
+// waiting out the 2-minute watchdog, and without any live/destructive action.
+void WarmBootMarkUnconfirmed()
+{
+    if (pblocktree) pblocktree->WriteFlag("nedb_warmboot_unconfirmed", true);
 }
 
 void BlockManager::Unload() {
